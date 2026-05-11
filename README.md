@@ -12,7 +12,7 @@ the matches forever. The result is a song that never quite ends.
 
 ```bash
 # one-time install (uses uv — https://docs.astral.sh/uv/)
-uv tool install git+https://github.com/<you>/infinite-jukebox
+uv tool install git+https://github.com/schoblaska/infinite-jukebox
 
 # play a YouTube URL or a local file — same command, your call
 infinite-jukebox 'https://www.youtube.com/watch?v=K4DyBUG242c'
@@ -36,14 +36,12 @@ The CLI prints a friendly setup hint if either is missing.
 ## What the TUI looks like
 
 ```
-┌─ infinite-jukebox ──────────────────────────┐
-│ ♪ Daft Punk — Around the World              │
-│ 120.3 bpm · beat 412/892 · jumps 23 · cov 71%
-│                                              │
-│           ╭─────╮     ╭───╮                  │  ← recent jumps
-│  · · · · · · │ · · │  · · · · · · · ·       │  ← branch points + cursor (red │) + last-branch (yellow │)
-│  beat 412/892   last-branch 880   covered 631/892
-└──────────────────────────────────────────────┘
+╭─ - B E D - G O E S - U P - ──────────────────────────────────╮
+│                                                              │
+│         ·  ·····         ·>──█···· ···      ·····│      · ·  │
+│                                                              │
+│                136.0 bpm · beat 114/234 · jumps 13 · cov 68% │
+╰──────────────────────────────────────────────────────────────╯
 ```
 
 - **Beat map**: every branchable beat (`·`), the last-branch wall (`│`), the
