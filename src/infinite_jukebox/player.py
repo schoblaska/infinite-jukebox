@@ -9,18 +9,27 @@ import sounddevice as sd
 from .analyze import Analysis
 
 
+# Defaults from rigdern/InfiniteJukeboxAlgorithm InfiniteBeats.js.
+JUMP_CHANCE_MIN = 0.18
+JUMP_CHANCE_MAX = 0.50
+JUMP_CHANCE_STEP = 0.018
+
+
 class JukeboxPlayer:
     def __init__(
         self,
         analysis: Analysis,
         *,
-        major_prob: float = 0.55,
-        minor_prob: float = 0.15,
+        jump_chance_min: float = JUMP_CHANCE_MIN,
+        jump_chance_max: float = JUMP_CHANCE_MAX,
+        jump_chance_step: float = JUMP_CHANCE_STEP,
         rng_seed: int | None = None,
     ) -> None:
         self.a = analysis
-        self.major_prob = float(major_prob)
-        self.minor_prob = float(minor_prob)
+        self.jump_chance_min = float(jump_chance_min)
+        self.jump_chance_max = float(jump_chance_max)
+        self.jump_chance_step = float(jump_chance_step)
+        self.jump_chance = self.jump_chance_min
         self.rng = np.random.default_rng(rng_seed)
 
         self.cursor_sample = 0
@@ -28,24 +37,19 @@ class JukeboxPlayer:
         self.play_count = np.zeros(self.a.n_beats, dtype=np.int64)
         self.jump_count = 0
         self.total_beats_played = 0
-        self._last_jump_from: int | None = None
-        self._last_event: tuple[str, int, int] | None = None  # (kind, from, to)
+        self._last_event: tuple[str, int, int] | None = None
+        self._next_neighbor_idx: dict[int, int] = {}
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------------
-    def _pick_target(self, table: dict, from_beat: int) -> int | None:
-        candidates = table.get(from_beat)
-        if not candidates:
+    def _pick_target(self, seed: int) -> int | None:
+        neighbors = self.a.branches.get(seed)
+        if not neighbors:
             return None
-        targets = np.array([t for t, _ in candidates], dtype=np.int64)
-        weights = np.array([w for _, w in candidates], dtype=np.float64)
-        weights = weights / (1.0 + self.play_count[targets].astype(np.float64))
-        if self._last_jump_from is not None:
-            weights = np.where(targets == self._last_jump_from, weights * 0.1, weights)
-        s = weights.sum()
-        if s <= 0:
-            return None
-        return int(self.rng.choice(targets, p=weights / s))
+        idx = self._next_neighbor_idx.get(seed, 0)
+        target = neighbors[idx % len(neighbors)][0]
+        self._next_neighbor_idx[seed] = idx + 1
+        return int(target)
 
     def _advance_beat(self) -> None:
         prev = self.beat_idx
@@ -53,36 +57,39 @@ class JukeboxPlayer:
         self.total_beats_played += 1
 
         a = self.a
-        next_beat = prev + 1
-        at_end = next_beat >= a.n_beats
+        seed = prev + 1
+        wrap = False
+        if seed >= a.n_beats:
+            seed = max(0, min(a.last_branch_point, a.n_beats - 1))
+            wrap = True
 
-        target: int | None = None
+        target = seed
         event_kind = "play"
+        seed_neighbors = a.branches.get(seed, [])
 
-        if not at_end:
-            # Decide based on the upcoming beat: is it the start of a new phrase?
-            kind = a.slot_kind(next_beat)
-            if kind == "major" and self.rng.random() < self.major_prob:
-                t = self._pick_target(a.branches_major, next_beat)
+        if seed_neighbors:
+            force = wrap or seed == a.last_branch_point
+            if force:
+                t = self._pick_target(seed)
                 if t is not None:
                     target = t
-                    event_kind = "MAJOR"
-            elif kind == "minor" and self.rng.random() < self.minor_prob:
-                t = self._pick_target(a.branches_minor, next_beat)
-                if t is not None:
-                    target = t
-                    event_kind = "minor"
-            if target is None:
-                target = next_beat
-        else:
-            # End of song: must jump. Find the slot prev belongs to and use its branches.
-            target = self._fallback_jump(prev)
+                    event_kind = "forced" if not wrap else "wrap"
+                    self.jump_chance = self.jump_chance_min
+            else:
+                self.jump_chance = min(
+                    self.jump_chance_max, self.jump_chance + self.jump_chance_step
+                )
+                if self.rng.random() < self.jump_chance:
+                    t = self._pick_target(seed)
+                    if t is not None:
+                        target = t
+                        event_kind = "jump"
+                        self.jump_chance = self.jump_chance_min
+        elif wrap:
+            # Wrapped but the wrap target has no neighbors — just snap there and keep going.
             event_kind = "wrap"
 
-        if event_kind in ("MAJOR", "minor"):
-            self._last_jump_from = prev
-            self.jump_count += 1
-        elif event_kind == "wrap":
+        if event_kind in ("jump", "forced", "wrap"):
             self.jump_count += 1
 
         with self._lock:
@@ -90,29 +97,6 @@ class JukeboxPlayer:
 
         self.beat_idx = target
         self.cursor_sample = int(a.beat_samples[target])
-
-    def _fallback_jump(self, prev: int) -> int:
-        """Pick a slot-start to jump to when playback hits the end."""
-        a = self.a
-        # Find the most recent slot start at or before prev.
-        rel = prev - a.phase
-        major_anchor = a.phase + (rel // a.major_step) * a.major_step if rel >= 0 else None
-        minor_anchor = a.phase + (rel // a.minor_step) * a.minor_step if rel >= 0 else None
-        for anchor, table in (
-            (major_anchor, a.branches_major),
-            (minor_anchor, a.branches_minor),
-        ):
-            if anchor is None:
-                continue
-            t = self._pick_target(table, anchor)
-            if t is not None:
-                return t
-        # No branches available — pick any major slot start, else minor, else beat 0.
-        if a.branches_major:
-            return int(self.rng.choice(sorted(a.branches_major.keys())))
-        if a.branches_minor:
-            return int(self.rng.choice(sorted(a.branches_minor.keys())))
-        return 0
 
     # ------------------------------------------------------------------
     def _callback(self, outdata: np.ndarray, frames: int, time_info, status) -> None:  # noqa: ARG002
@@ -153,6 +137,7 @@ class JukeboxPlayer:
             "total_beats_played": int(self.total_beats_played),
             "coverage": float(np.count_nonzero(self.play_count)) / max(self.a.n_beats, 1),
             "last_event": event,
+            "jump_chance": float(self.jump_chance),
         }
 
     def run(self, status_callback=None, status_interval: float = 0.25) -> None:

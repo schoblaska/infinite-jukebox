@@ -8,7 +8,7 @@ import click
 
 from .analyze import analyze
 from .download import fetch_audio
-from .player import JukeboxPlayer
+from .player import JUMP_CHANCE_MAX, JUMP_CHANCE_MIN, JUMP_CHANCE_STEP, JukeboxPlayer
 
 
 DEFAULT_CACHE = Path.home() / ".cache" / "infinite-jukebox"
@@ -22,15 +22,13 @@ def _print_status(snap: dict, *, prefix: str = "") -> None:
     ev_str = ""
     if ev is not None:
         kind, src, dst = ev
-        if kind == "jump":
-            ev_str = f"  jump {src}->{dst}"
-        elif kind == "wrap":
-            ev_str = f"  wrap {src}->{dst}"
+        if kind in ("jump", "forced", "wrap"):
+            ev_str = f"  {kind} {src}->{dst}"
     stats = (
         f"{prefix}beat {beat:>5}/{n}  jumps={snap['jump_count']:<4} "
-        f"played={snap['total_beats_played']:<5} cov={snap['coverage']*100:5.1f}%{ev_str}"
+        f"played={snap['total_beats_played']:<5} cov={snap['coverage']*100:5.1f}% "
+        f"p={snap['jump_chance']:.2f}{ev_str}"
     )
-    # Fit a progress bar in whatever space is left, then truncate to terminal width.
     bar_w = max(0, cols - len(stats) - 4)
     if bar_w >= 8:
         pos = int(bar_w * beat / max(n - 1, 1))
@@ -53,62 +51,54 @@ def _print_status(snap: dict, *, prefix: str = "") -> None:
     help="Where to cache downloaded audio and analysis.",
 )
 @click.option(
-    "--major-prob",
-    type=click.FloatRange(0.0, 1.0),
-    default=0.55,
-    show_default=True,
-    help="Probability of jumping at an 8-bar boundary.",
-)
-@click.option(
-    "--minor-prob",
-    type=click.FloatRange(0.0, 1.0),
-    default=0.15,
-    show_default=True,
-    help="Probability of jumping at a 4-bar (non-8-bar) boundary.",
-)
-@click.option(
     "--bar-beats",
     type=click.IntRange(1, 16),
     default=4,
     show_default=True,
-    help="Beats per bar (4 for 4/4 time).",
+    help="Beats per bar (4 for 4/4 time). Jumps require matching beat position within the bar.",
 )
 @click.option(
     "--phase",
     type=click.IntRange(0, 1024),
     default=0,
     show_default=True,
-    help="Beats to offset the bar grid (use if downbeat doesn't align with beat 0).",
+    help="Bar-grid phase offset, in beats.",
 )
 @click.option(
-    "--top-k",
-    type=click.IntRange(1, 64),
-    default=8,
+    "--jump-chance-min",
+    type=click.FloatRange(0.0, 1.0),
+    default=JUMP_CHANCE_MIN,
     show_default=True,
-    help="Max branch candidates per slot.",
+    help="Branch probability immediately after a jump.",
 )
 @click.option(
-    "--max-distance-pct",
-    type=click.FloatRange(0.1, 100.0),
-    default=35.0,
+    "--jump-chance-max",
+    type=click.FloatRange(0.0, 1.0),
+    default=JUMP_CHANCE_MAX,
     show_default=True,
-    help="Keep branches whose distance is in the lowest N% of all pairwise distances.",
+    help="Cap on the rising branch probability between jumps.",
+)
+@click.option(
+    "--jump-chance-step",
+    type=click.FloatRange(0.0, 1.0),
+    default=JUMP_CHANCE_STEP,
+    show_default=True,
+    help="Per-beat increment to branch probability.",
 )
 @click.option("--seed", type=int, default=None, help="RNG seed for reproducible playback.")
 @click.option("--quiet", is_flag=True, help="Suppress status output.")
 def main(
     source: str,
     cache_dir: Path,
-    major_prob: float,
-    minor_prob: float,
     bar_beats: int,
     phase: int,
-    top_k: int,
-    max_distance_pct: float,
+    jump_chance_min: float,
+    jump_chance_max: float,
+    jump_chance_step: float,
     seed: int | None,
     quiet: bool,
 ) -> None:
-    """Play SOURCE (a YouTube URL or local audio file) forever, splicing similar beats."""
+    """Play SOURCE (a YouTube URL or local audio file) forever, splicing between similar beats."""
     audio_cache = cache_dir / "audio"
     analysis_cache = cache_dir / "analysis"
 
@@ -117,29 +107,23 @@ def main(
     click.echo(f"  audio: {audio_path}", err=True)
 
     click.echo(f"→ analyzing: {title}", err=True)
-    a = analyze(
-        audio_path,
-        analysis_cache,
-        bar_beats=bar_beats,
-        phase=phase,
-        top_k=top_k,
-        max_distance_pct=max_distance_pct,
-    )
-    n_major_src = len(a.branches_major)
-    n_minor_src = len(a.branches_minor)
+    a = analyze(audio_path, analysis_cache, bar_beats=bar_beats, phase=phase)
+    n_branchable = len(a.branches)
+    n_edges = sum(len(v) for v in a.branches.values())
     click.echo(
         f"  tempo={a.tempo:.1f} bpm  beats={a.n_beats}  bar={a.bar_beats}  "
-        f"8-bar slots branchable={n_major_src}  4-bar slots branchable={n_minor_src}",
+        f"branchable_beats={n_branchable} edges={n_edges} last_branch_point={a.last_branch_point}",
         err=True,
     )
-    if n_major_src == 0 and n_minor_src == 0:
+    if n_branchable == 0:
         click.echo("  warning: no branches found — playback will just loop.", err=True)
 
     click.echo(f"→ playing (ctrl-c to stop)", err=True)
     player = JukeboxPlayer(
         a,
-        major_prob=major_prob,
-        minor_prob=minor_prob,
+        jump_chance_min=jump_chance_min,
+        jump_chance_max=jump_chance_max,
+        jump_chance_step=jump_chance_step,
         rng_seed=seed,
     )
     status_cb = None if quiet else _print_status
