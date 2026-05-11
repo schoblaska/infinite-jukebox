@@ -19,7 +19,7 @@ infinite-jukebox ~/Music/some-song.mp3
 ```
 
 First run will download (if it's a URL), analyze, and cache results under
-`~/.cache/infinite-jukebox/`. Re-runs are instant.
+`~/.cache/infinite-jukebox/`.
 
 ### System dependencies
 
