@@ -1,15 +1,10 @@
 # infinite-jukebox
 
-```
-╭─ - B E D - G O E S - U P - ──────────────────────────────────╮
-│                                                              │
-│         ·  ·····         ·>──█···· ···      ·····│      · ·  │
-│                                                              │
-│                136.0 bpm · beat 114/234 · jumps 13 · cov 68% │
-╰──────────────────────────────────────────────────────────────╯
-```
+<div align="center">
+  <img width="636" height="169" alt="Screenshot 2026-05-10 at 10 53 20 PM" src="https://github.com/user-attachments/assets/e3eb5883-636c-47eb-a101-564fe6e5c044" />
+</div>
 
-A small Python port of Paul Lamere's *Infinite Jukebox* (via
+A port of Paul Lamere's *Infinite Jukebox* (via
 [rigdern's JS rewrite](https://github.com/rigdern/InfiniteJukeboxAlgorithm)).
 
 ## Quick start
