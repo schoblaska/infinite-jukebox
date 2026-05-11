@@ -41,6 +41,33 @@ def _print_status(snap: dict, *, prefix: str = "") -> None:
     sys.stdout.flush()
 
 
+def _check_deps() -> None:
+    """Friendly pre-flight check so missing system bits give helpful messages."""
+    problems: list[str] = []
+    if shutil.which("ffmpeg") is None:
+        problems.append(
+            "ffmpeg not found on PATH.\n"
+            "  macOS:   brew install ffmpeg\n"
+            "  Linux:   sudo apt install ffmpeg   (or your distro's equivalent)\n"
+            "  Windows: winget install Gyan.FFmpeg"
+        )
+    try:
+        import sounddevice  # noqa: F401
+    except OSError as e:
+        problems.append(
+            f"audio backend (PortAudio) failed to load: {e}\n"
+            "  macOS:   brew install portaudio\n"
+            "  Linux:   sudo apt install libportaudio2\n"
+            "  Windows: shipped with sounddevice — try reinstalling: uv pip install --reinstall sounddevice"
+        )
+    if problems:
+        click.echo("Setup issues:", err=True)
+        for p in problems:
+            click.echo("  • " + p.replace("\n", "\n    "), err=True)
+        click.echo("", err=True)
+        sys.exit(2)
+
+
 @click.command(context_settings={"help_option_names": ["-h", "--help"]})
 @click.argument("source")
 @click.option(
@@ -86,7 +113,12 @@ def _print_status(snap: dict, *, prefix: str = "") -> None:
     help="Per-beat increment to branch probability.",
 )
 @click.option("--seed", type=int, default=None, help="RNG seed for reproducible playback.")
-@click.option("--quiet", is_flag=True, help="Suppress status output.")
+@click.option(
+    "--tui/--no-tui",
+    default=None,
+    help="Force the Winamp-style TUI on or off. Default: TUI if stdout is a terminal.",
+)
+@click.option("--quiet", is_flag=True, help="Suppress status output (no-tui mode only).")
 def main(
     source: str,
     cache_dir: Path,
@@ -96,9 +128,12 @@ def main(
     jump_chance_max: float,
     jump_chance_step: float,
     seed: int | None,
+    tui: bool | None,
     quiet: bool,
 ) -> None:
     """Play SOURCE (a YouTube URL or local audio file) forever, splicing between similar beats."""
+    _check_deps()
+
     audio_cache = cache_dir / "audio"
     analysis_cache = cache_dir / "analysis"
 
@@ -118,7 +153,6 @@ def main(
     if n_branchable == 0:
         click.echo("  warning: no branches found — playback will just loop.", err=True)
 
-    click.echo(f"→ playing (ctrl-c to stop)", err=True)
     player = JukeboxPlayer(
         a,
         jump_chance_min=jump_chance_min,
@@ -126,6 +160,15 @@ def main(
         jump_chance_step=jump_chance_step,
         rng_seed=seed,
     )
+
+    use_tui = tui if tui is not None else sys.stdout.isatty()
+    if use_tui:
+        from .tui import run_tui
+
+        run_tui(player, title)
+        return
+
+    click.echo("→ playing (ctrl-c to stop)", err=True)
     status_cb = None if quiet else _print_status
     try:
         player.run(status_callback=status_cb)

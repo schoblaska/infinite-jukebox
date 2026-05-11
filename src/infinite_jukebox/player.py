@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+from collections import deque
 
 import numpy as np
 import sounddevice as sd
@@ -38,8 +39,11 @@ class JukeboxPlayer:
         self.jump_count = 0
         self.total_beats_played = 0
         self._last_event: tuple[str, int, int] | None = None
+        self._event_log: deque[tuple[str, int, int]] = deque(maxlen=64)
         self._next_neighbor_idx: dict[int, int] = {}
         self._lock = threading.Lock()
+
+        self._stop = threading.Event()
 
     # ------------------------------------------------------------------
     def _pick_target(self, seed: int) -> int | None:
@@ -94,6 +98,7 @@ class JukeboxPlayer:
 
         with self._lock:
             self._last_event = (event_kind, prev, target)
+            self._event_log.append((event_kind, prev, target))
 
         self.beat_idx = target
         self.cursor_sample = int(a.beat_samples[target])
@@ -140,18 +145,30 @@ class JukeboxPlayer:
             "jump_chance": float(self.jump_chance),
         }
 
+    def drain_events(self) -> list[tuple[str, int, int]]:
+        """Pop and return queued (kind, src, dst) events since last drain."""
+        with self._lock:
+            out = list(self._event_log)
+            self._event_log.clear()
+        return out
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    # ------------------------------------------------------------------
     def run(self, status_callback=None, status_interval: float = 0.25) -> None:
+        # blocksize=1024 (~23ms @ 44.1kHz) keeps the audio thread well ahead of
+        # main-thread GIL hiccups from the TUI refresh.
         stream = sd.OutputStream(
             samplerate=self.a.samplerate,
             channels=self.a.audio.shape[1],
             dtype="float32",
             callback=self._callback,
-            blocksize=0,
-            latency="low",
+            blocksize=1024,
         )
         with stream:
             try:
-                while True:
+                while not self._stop.is_set():
                     if status_callback is not None:
                         status_callback(self.snapshot())
                     time.sleep(status_interval)
