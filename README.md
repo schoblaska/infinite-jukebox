@@ -13,7 +13,7 @@ A port of Paul Lamere's *Infinite Jukebox* (via
 # one-time install (uses uv — https://docs.astral.sh/uv/)
 uv tool install git+https://github.com/schoblaska/infinite-jukebox
 
-# play a YouTube URL or a local file — same command, your call
+# play a YouTube URL or a local file
 infinite-jukebox https://www.youtube.com/watch?v=a4HuUmwWesA
 infinite-jukebox ~/Music/some-song.mp3
 ```
